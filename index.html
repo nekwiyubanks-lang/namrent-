@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NamRent – Find a place to stay in Namibia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+<style>
+:root{--sea:#0b3c49;--mist:#e8f1f0;--dune:#e8a33d;--ink:#10222a;--line:#cfdcdb;--bg:#f7faf9;--muted:#5a6f75}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Bricolage Grotesque',system-ui,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+header{background:var(--sea);color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+header b{font-size:1.4rem;font-weight:800;letter-spacing:-.5px}
+header b span{color:var(--dune)}
+nav{display:flex;gap:8px;align-items:center;font-size:.9rem}
+button,.btn{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:9px 16px;font-weight:600;background:var(--dune);color:var(--ink)}
+button.ghost{background:transparent;color:inherit;border:1px solid currentColor}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid var(--dune);outline-offset:2px}
+.hero{background:var(--sea);color:#fff;padding:28px 20px 34px}
+.hero h1{margin:0 0 6px;font-size:clamp(1.8rem,5vw,3rem);font-weight:800;letter-spacing:-1px;max-width:16ch;line-height:1.05}
+.hero p{margin:0 0 18px;color:#bfd6d9;max-width:46ch}
+.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;max-width:900px}
+input,select,textarea{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);width:100%}
+main{max-width:1000px;margin:0 auto;padding:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:18px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column}
+.card:hover{border-color:var(--sea)}
+.thumb{aspect-ratio:4/3;background:var(--mist) center/cover;display:grid;place-items:center;color:var(--muted);font-size:.85rem}
+.card .body{padding:12px 14px}
+.price{font-weight:800;font-size:1.25rem;color:var(--sea)}
+.price small{font-weight:400;color:var(--muted);font-size:.8rem}
+.card h3{margin:2px 0;font-size:1rem}
+.meta{color:var(--muted);font-size:.85rem}
+.stars{color:#b9770e;font-weight:600}
+.tag{display:inline-block;background:var(--mist);border-radius:99px;padding:2px 10px;font-size:.78rem;margin:6px 4px 0 0}
+dialog{border:0;border-radius:14px;padding:0;width:min(640px,94vw);max-height:92vh;overflow:auto}
+dialog::backdrop{background:rgba(11,60,73,.6)}
+.dlg{padding:20px}
+.dlg h2{margin:0 0 10px}
+.gallery{display:flex;gap:8px;overflow-x:auto;margin:10px 0}
+.gallery img{height:200px;border-radius:8px}
+label{display:block;font-size:.85rem;font-weight:600;margin:10px 0 4px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.review{border-top:1px solid var(--line);padding:10px 0}
+.err{color:#b3261e;font-size:.9rem;min-height:1.2em}
+.empty{text-align:center;padding:50px 10px;color:var(--muted)}
+.close{float:right;background:var(--mist);color:var(--ink)}
+.wa{background:#25d366;color:#04301a;display:inline-block;text-decoration:none;border-radius:8px;padding:9px 16px;font-weight:600}
+@media (prefers-reduced-motion:no-preference){.card{transition:border-color .15s}}
+</style>
+</head>
+<body>
+<header>
+  <b>Nam<span>Rent</span></b>
+  <nav id="nav"></nav>
+</header>
+<section class="hero">
+  <h1>Find a place to stay, anywhere in Namibia.</h1>
+  <p>Real listings with prices, photos and honest reviews from people who lived there.</p>
+  <div class="filters">
+    <input id="q" placeholder="Search area or keyword" aria-label="Search">
+    <input id="town" placeholder="Town (e.g. Windhoek)" aria-label="Town">
+    <select id="type" aria-label="Type"><option value="">Any type</option><option>Single room</option><option>Bachelor flat</option><option>Shared room</option><option>1 bedroom</option><option>2 bedroom</option><option>House</option></select>
+    <input id="max" type="number" min="0" placeholder="Max rent (N$)" aria-label="Max rent">
+  </div>
+</section>
+<main><div class="grid" id="grid"></div></main>
+
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+// 1. Paste your own values from Supabase: Project Settings > API
+https://mevukgrvdsallyismwee.supabase.co/rest/v1/ = 'PASTE_YOUR_PROJECT_URL';
+sb_publishable_bLWxCVG_ssY2zlpHHy06hQ_iFAyEDi6 = 'PASTE_YOUR_ANON_PUBLIC_KEY';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const $ = id => document.getElementById(id);
+let user = null;
+const money = n => 'N$ ' + Number(n).toLocaleString();
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const withRating = l => { const rs = l.reviews || []; l.review_count = rs.length; l.rating = rs.length ? (rs.reduce((a, r) => a + r.rating, 0) / rs.length).toFixed(1) : null; return l; };
+
+async function loadUser() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { user = null; return renderNav(); }
+  const { data } = await sb.from('profiles').select('name,role').eq('id', session.user.id).single();
+  user = { id: session.user.id, name: data?.name || 'there', role: data?.role || 'renter' };
+  renderNav();
+}
+async function logout() { await sb.auth.signOut(); user = null; renderNav(); }
+function openDlg(html) { $('dlgBody').innerHTML = '<button class="close" onclick="dlg.close()">Close</button>' + html; if (!dlg.open) dlg.showModal(); }
+
+function renderNav() {
+  $('nav').innerHTML = user
+    ? `<span>Hi, ${esc(user.name.split(' ')[0])}</span>` +
+      (user.role === 'landlord' ? '<button onclick="postForm()">Post a listing</button>' : '') +
+      '<button class="ghost" onclick="logout()">Log out</button>'
+    : '<button class="ghost" onclick="authForm(\'login\')">Log in</button><button onclick="authForm(\'register\')">Sign up</button>';
+}
+
+function authForm(mode) {
+  const reg = mode === 'register';
+  openDlg(`<div><h2>${reg ? 'Create your account' : 'Log in'}</h2>
+  ${reg ? '<label>Full name</label><input id="aName"><label>I am a</label><select id="aRole"><option value="renter">Renter</option><option value="landlord">Landlord</option></select>' : ''}
+  <label>Email</label><input id="aEmail" type="email">
+  <label>Password</label><input id="aPass" type="password" placeholder="At least 6 characters">
+  <p class="err" id="aErr"></p><button onclick="submitAuth('${mode}')">${reg ? 'Sign up' : 'Log in'}</button></div>`);
+}
+async function submitAuth(mode) {
+  try {
+    const email = aEmail.value.trim(), password = aPass.value;
+    if (mode === 'register') {
+      const { error } = await sb.auth.signUp({ email, password, options: { data: { name: aName.value.trim(), role: aRole.value } } });
+      if (error) throw error;
+    } else {
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    }
+    await loadUser();
+    if (!user) { aErr.textContent = 'Check your email to confirm your account, then log in.'; return; }
+    dlg.close();
+  } catch (e) { aErr.textContent = e.message; }
+}
+
+function postForm() {
+  openDlg(`<h2>Post a listing</h2>
+  <label>Title</label><input id="pTitle" placeholder="Sunny bachelor flat near UNAM">
+  <div class="row"><div><label>Town</label><input id="pTown"></div><div><label>Suburb</label><input id="pSub"></div></div>
+  <div class="row"><div><label>Type</label><select id="pType"><option>Single room</option><option>Bachelor flat</option><option>Shared room</option><option>1 bedroom</option><option>2 bedroom</option><option>House</option></select></div>
+  <div><label>Rent per month (N$)</label><input id="pPrice" type="number"></div></div>
+  <div class="row"><div><label>Deposit (N$)</label><input id="pDep" type="number"></div><div><label>WhatsApp number</label><input id="pWa" placeholder="264811234567"></div></div>
+  <label>What is included? (comma separated)</label><input id="pInc" placeholder="Water, Electricity, WiFi">
+  <label>Description</label><textarea id="pDesc" rows="3"></textarea>
+  <label>Photos (up to 8)</label><input id="pPhotos" type="file" accept="image/*" multiple>
+  <p class="err" id="pErr"></p><button onclick="submitPost()">Publish listing</button>`);
+}
+async function submitPost() {
+  try {
+    if (!pTitle.value || !pTown.value || !pPrice.value) throw new Error('Title, town and rent are required.');
+    const urls = [];
+    for (const [i, f] of [...pPhotos.files].slice(0, 8).entries()) {
+      const path = `${user.id}/${Date.now()}-${i}-${f.name.replace(/[^\w.]/g, '_')}`;
+      const { error } = await sb.storage.from('listing-photos').upload(path, f);
+      if (error) throw error;
+      urls.push(sb.storage.from('listing-photos').getPublicUrl(path).data.publicUrl);
+    }
+    const { error } = await sb.from('listings').insert({
+      user_id: user.id, title: pTitle.value, town: pTown.value, suburb: pSub.value, type: pType.value,
+      price: +pPrice.value, deposit: +pDep.value || 0, whatsapp: pWa.value, includes: pInc.value,
+      description: pDesc.value, photos: urls });
+    if (error) throw error;
+    dlg.close(); load();
+  } catch (e) { pErr.textContent = e.message; }
+}
+
+function card(l) {
+  const img = l.photos?.[0] ? `style="background-image:url('${l.photos[0]}')"` : '';
+  return `<article class="card" tabindex="0" onclick="show(${l.id})" onkeydown="if(event.key==='Enter')show(${l.id})">
+    <div class="thumb" ${img}>${l.photos?.[0] ? '' : 'No photo yet'}</div>
+    <div class="body"><div class="price">${money(l.price)} <small>per month</small></div>
+    <h3>${esc(l.title)}</h3><div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)}</div>
+    <div class="stars">${l.rating ? '★ ' + l.rating + ' (' + l.review_count + ')' : 'No reviews yet'}</div></div></article>`;
+}
+async function load() {
+  let qy = sb.from('listings').select('*,reviews(rating)').eq('available', true).order('created_at', { ascending: false }).limit(100);
+  if (town.value) qy = qy.ilike('town', '%' + town.value + '%');
+  if (type.value) qy = qy.eq('type', type.value);
+  if (max.value) qy = qy.lte('price', +max.value);
+  if (q.value) { const s = q.value.replace(/[,()%*]/g, ' '); qy = qy.or(`title.ilike.%${s}%,suburb.ilike.%${s}%,description.ilike.%${s}%`); }
+  const { data, error } = await qy;
+  const g = $('grid');
+  if (error) { g.innerHTML = '<div class="empty" style="grid-column:1/-1">' + esc(error.message) + '</div>'; return; }
+  g.innerHTML = data.length ? data.map(l => card(withRating(l))).join('')
+    : '<div class="empty" style="grid-column:1/-1">No places match yet. Try a different town or a higher rent limit.</div>';
+}
+
+async function show(id) {
+  const { data, error } = await sb.from('listings').select('*,profiles(name),reviews(rating,comment,created_at,profiles(name))').eq('id', id).single();
+  if (error) return;
+  const l = withRating(data);
+  const wa = l.whatsapp ? `https://wa.me/${l.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent('Hi, is "' + l.title + '" still available?')}` : '';
+  const share = `https://wa.me/?text=${encodeURIComponent(l.title + ' – ' + money(l.price) + ' in ' + l.town + ' ' + location.href.split('#')[0])}`;
+  openDlg(`<h2>${esc(l.title)}</h2>
+  <div class="price">${money(l.price)} <small>per month · deposit ${money(l.deposit)}</small></div>
+  <div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)} · listed by ${esc(l.profiles?.name)}</div>
+  <div class="gallery">${(l.photos || []).map(p => `<img src="${p}" alt="Photo of ${esc(l.title)}">`).join('') || '<p class="meta">No photos yet.</p>'}</div>
+  ${(l.includes || '').split(',').filter(x => x.trim()).map(x => `<span class="tag">${esc(x.trim())}</span>`).join('')}
+  <p>${esc(l.description)}</p>
+  <p>${wa ? `<a class="wa" href="${wa}" target="_blank" rel="noopener">Chat on WhatsApp</a> ` : ''}<a class="wa" style="background:var(--mist);color:var(--ink)" href="${share}" target="_blank" rel="noopener">Share</a></p>
+  <p class="meta">Tip: never pay a deposit before you have viewed the place.</p>
+  <h3>Reviews ${l.rating ? '· ★ ' + l.rating : ''}</h3>
+  ${l.reviews.map(r => `<div class="review"><b>${esc(r.profiles?.name)}</b> <span class="stars">${'★'.repeat(r.rating)}</span><div>${esc(r.comment)}</div></div>`).join('') || '<p class="meta">No reviews yet. Be the first to rate this place.</p>'}
+  ${user ? `<label>Your rating</label><select id="rStars"><option value="5">5 – Excellent</option><option value="4">4 – Good</option><option value="3">3 – Okay</option><option value="2">2 – Poor</option><option value="1">1 – Bad</option></select>
+  <label>Comment</label><textarea id="rText" rows="2" placeholder="Water, noise, safety, landlord..."></textarea>
+  <p class="err" id="rErr"></p><button onclick="rate(${l.id})">Submit review</button>`
+  : '<p><button onclick="authForm(\'login\')">Log in to leave a review</button></p>'}`);
+}
+async function rate(id) {
+  const { error } = await sb.from('reviews').upsert(
+    { listing_id: id, user_id: user.id, rating: +rStars.value, comment: rText.value }, { onConflict: 'listing_id,user_id' });
+  if (error) { rErr.textContent = error.message; return; }
+  await show(id); load();
+}
+
+let t; [q, town, max].forEach(el => el.addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 300); }));
+type.addEventListener('change', load);
+loadUser(); load();
+</script>
+
+</body>
+</html>
