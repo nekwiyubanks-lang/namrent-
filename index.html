@@ -48,7 +48,13 @@ label{display:block;font-size:.85rem;font-weight:600;margin:10px 0 4px}
 .close{float:right;background:var(--mist);color:var(--ink)}
 .wa{background:#25d366;color:#04301a;display:inline-block;text-decoration:none;border-radius:8px;padding:9px 16px;font-weight:600}
 @media (prefers-reduced-motion:no-preference){.card{transition:border-color .15s}}
+[hidden]{display:none!important}
+.badge{background:#d7f0e0;color:#0b5a2b;border-radius:99px;padding:2px 9px;font-size:.75rem;font-weight:600;display:inline-block}
+#map{height:460px;border-radius:12px;border:1px solid var(--line)}
+.bar{display:flex;justify-content:flex-end;margin-bottom:12px}
+.bar button{background:#fff;border:1px solid var(--line);color:var(--ink)}
 </style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 </head>
 <body>
 <header>
@@ -65,11 +71,13 @@ label{display:block;font-size:.85rem;font-weight:600;margin:10px 0 4px}
     <input id="max" type="number" min="0" placeholder="Max rent (N$)" aria-label="Max rent">
   </div>
 </section>
-<main><div class="grid" id="grid"></div></main>
+<main><div class="bar"><button id="vBtn" onclick="toggleMap()">Show map</button></div>
+<p class="meta" id="mapNote"></p><div id="map" hidden></div><div class="grid" id="grid"></div></main>
 
-<p style="text-align:center;color:#5a6f75;font-size:.75rem">Build 4</p>
+<p style="text-align:center;color:#5a6f75;font-size:.75rem">Build 5</p>
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 function showFatal(m){let b=document.getElementById('fatal');if(!b){b=document.createElement('div');b.id='fatal';b.style.cssText='background:#b3261e;color:#fff;padding:12px 16px;font-size:.9rem;word-break:break-word';document.body.prepend(b);}b.textContent='Problem: '+m;}
@@ -84,7 +92,7 @@ const SUPABASE_KEY = 'sb_publishable_bLWxCVG_ssY2zlpHHy06hQ_iFAyEDi6';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const $ = id => document.getElementById(id);
-let user = null;
+let user = null, mineMode = false, mapMode = false, lastList = [];
 const money = n => 'N$ ' + Number(n).toLocaleString();
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const withRating = l => { const rs = l.reviews || []; l.review_count = rs.length; l.rating = rs.length ? (rs.reduce((a, r) => a + r.rating, 0) / rs.length).toFixed(1) : null; return l; };
@@ -102,7 +110,7 @@ function openDlg(html) { $('dlgBody').innerHTML = '<button class="close" onclick
 function renderNav() {
   $('nav').innerHTML = user
     ? `<span>Hi, ${esc(user.name.split(' ')[0])}</span>` +
-      (user.role === 'landlord' ? '<button onclick="postForm()">Post a listing</button>' : '') +
+      (user.role === 'landlord' ? '<button onclick="postForm()">Post a listing</button><button class="ghost" onclick="toggleMine()">' + (mineMode ? 'All listings' : 'My listings') + '</button>' : '') +
       '<button class="ghost" onclick="logout()">Log out</button>'
     : '<button class="ghost" onclick="authForm(\'login\')">Log in</button><button onclick="authForm(\'register\')">Sign up</button>';
 }
@@ -141,7 +149,9 @@ function postForm() {
   <label>What is included? (comma separated)</label><input id="pInc" placeholder="Water, Electricity, WiFi">
   <label>Description</label><textarea id="pDesc" rows="3"></textarea>
   <label>Photos (up to 8)</label><input id="pPhotos" type="file" accept="image/*" multiple>
+  <label>Location (tap the map to drop a pin)</label><div id="pickMap" style="height:200px;border-radius:8px;border:1px solid var(--line)"></div><p class="meta" id="pickNote">No pin set yet. You can skip this.</p>
   <p class="err" id="pErr"></p><button id="pBtn" onclick="submitPost()">Publish listing</button>`);
+  setTimeout(initPick, 50);
 }
 let posting = false;
 async function shrink(file) {
@@ -170,7 +180,7 @@ async function submitPost() {
     const { error } = await sb.from('listings').insert({
       user_id: user.id, title: pTitle.value, town: pTown.value, suburb: pSub.value, type: pType.value,
       price: +pPrice.value, deposit: +pDep.value || 0, whatsapp: pWa.value, includes: pInc.value,
-      description: pDesc.value, photos: urls });
+      description: pDesc.value, photos: urls, lat: pickLL ? pickLL.lat : null, lng: pickLL ? pickLL.lng : null });
     if (error) throw error;
     dlg.close(); load();
   } catch (e) { pErr.textContent = e.message; }
@@ -188,11 +198,50 @@ function card(l) {
   return `<article class="card" tabindex="0" onclick="show(${l.id})" onkeydown="if(event.key==='Enter')show(${l.id})">
     <div class="thumb" ${img}>${l.photos?.[0] ? '' : 'No photo yet'}</div>
     <div class="body"><div class="price">${money(l.price)} <small>per month</small></div>
-    <h3>${esc(l.title)}</h3><div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)}</div>
+    <h3>${esc(l.title)}</h3>${l.profiles?.verified ? '<span class="badge">✓ Verified landlord</span>' : ''}${l.available ? '' : ' <span class="tag">Taken</span>'}<div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)}</div>
     <div class="stars">${l.rating ? '★ ' + l.rating + ' (' + l.review_count + ')' : 'No reviews yet'}</div></div></article>`;
 }
+function toggleMine() { mineMode = !mineMode; renderNav(); load(); }
+let map, layer;
+const dot = { radius: 9, color: '#0b3c49', fillColor: '#e8a33d', fillOpacity: .95, weight: 2 };
+const tiles = () => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; OpenStreetMap contributors' });
+function toggleMap() {
+  mapMode = !mapMode; $('map').hidden = !mapMode; $('grid').hidden = mapMode;
+  $('vBtn').textContent = mapMode ? 'Show list' : 'Show map';
+  if (mapMode) {
+    if (!map) { map = L.map('map').setView([-22.5609, 17.0658], 6); tiles().addTo(map); layer = L.layerGroup().addTo(map); }
+    drawMap(); setTimeout(() => map.invalidateSize(), 50);
+  } else $('mapNote').textContent = '';
+}
+function drawMap() {
+  if (!map || !mapMode) return;
+  layer.clearLayers(); const pts = [];
+  lastList.filter(l => l.lat != null && l.lng != null).forEach(l => {
+    L.circleMarker([l.lat, l.lng], dot).addTo(layer).bindPopup(`<b>${esc(l.title)}</b><br>${money(l.price)} per month<br><a href="#" onclick="show(${l.id});return false">View details</a>`);
+    pts.push([l.lat, l.lng]);
+  });
+  $('mapNote').textContent = pts.length ? '' : 'No listings with a map pin match your search yet.';
+  if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 14 });
+}
+let pickLL = null, pickMap, pickMarker;
+function initPick() {
+  pickLL = null; pickMarker = null;
+  pickMap = L.map('pickMap').setView([-22.5609, 17.0658], 11); tiles().addTo(pickMap);
+  pickMap.on('click', e => {
+    pickLL = e.latlng;
+    if (pickMarker) pickMarker.setLatLng(e.latlng); else pickMarker = L.circleMarker(e.latlng, dot).addTo(pickMap);
+    $('pickNote').textContent = 'Pin set. Tap again to move it.';
+  });
+  pickMap.invalidateSize();
+}
+async function setAvail(id, v) {
+  const { error } = await sb.from('listings').update({ available: v }).eq('id', id);
+  if (error) { alert(error.message); return; }
+  dlg.close(); load();
+}
 async function load() {
-  let qy = sb.from('listings').select('*,reviews(rating)').eq('available', true).order('created_at', { ascending: false }).limit(100);
+  let qy = sb.from('listings').select('*,reviews(rating),profiles(verified)').order('created_at', { ascending: false }).limit(100);
+  qy = (mineMode && user) ? qy.eq('user_id', user.id) : qy.eq('available', true);
   if (town.value) qy = qy.ilike('town', '%' + town.value + '%');
   if (type.value) qy = qy.eq('type', type.value);
   if (max.value) qy = qy.lte('price', +max.value);
@@ -200,28 +249,29 @@ async function load() {
   const { data, error } = await qy;
   const g = $('grid');
   if (error) { g.innerHTML = '<div class="empty" style="grid-column:1/-1">' + esc(error.message) + '</div>'; return; }
-  g.innerHTML = data.length ? data.map(l => card(withRating(l))).join('')
+  lastList = data.map(withRating); drawMap();
+  g.innerHTML = data.length ? lastList.map(card).join('')
     : '<div class="empty" style="grid-column:1/-1">No places match yet. Try a different town or a higher rent limit.</div>';
 }
 
 async function show(id) {
-  const { data, error } = await sb.from('listings').select('*,profiles(name),reviews(rating,comment,created_at,profiles(name))').eq('id', id).single();
+  const { data, error } = await sb.from('listings').select('*,profiles(name,verified),reviews(rating,comment,created_at,profiles(name))').eq('id', id).single();
   if (error) return;
   const l = withRating(data);
   const wa = l.whatsapp ? `https://wa.me/${l.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent('Hi, is "' + l.title + '" still available?')}` : '';
   const share = `https://wa.me/?text=${encodeURIComponent(l.title + ' – ' + money(l.price) + ' in ' + l.town + ' ' + location.href.split('#')[0])}`;
   openDlg(`<h2>${esc(l.title)}</h2>
   <div class="price">${money(l.price)} <small>per month · deposit ${money(l.deposit)}</small></div>
-  <div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)} · listed by ${esc(l.profiles?.name)}</div>
+  <div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)} · listed by ${esc(l.profiles?.name)} ${l.profiles?.verified ? '<span class="badge">✓ Verified landlord</span>' : ''}</div>
   <div class="gallery">${(l.photos || []).map(p => `<img src="${p}" alt="Photo of ${esc(l.title)}">`).join('') || '<p class="meta">No photos yet.</p>'}</div>
   ${(l.includes || '').split(',').filter(x => x.trim()).map(x => `<span class="tag">${esc(x.trim())}</span>`).join('')}
   <p>${esc(l.description)}</p>
   <p>${wa ? `<a class="wa" href="${wa}" target="_blank" rel="noopener">Chat on WhatsApp</a> ` : ''}<a class="wa" style="background:var(--mist);color:var(--ink)" href="${share}" target="_blank" rel="noopener">Share</a></p>
   <p class="meta">Tip: never pay a deposit before you have viewed the place.</p>
-  ${user && user.id === l.user_id ? `<p><button class="ghost" style="color:#b3261e" onclick="del(${l.id})">Delete this listing</button></p>` : ''}
+  ${user && user.id === l.user_id ? `<p><button onclick="setAvail(${l.id},${!l.available})">${l.available ? 'Mark as taken' : 'Mark as available again'}</button> <button class="ghost" style="color:#b3261e" onclick="del(${l.id})">Delete this listing</button></p>` : ''}
   <h3>Reviews ${l.rating ? '· ★ ' + l.rating : ''}</h3>
   ${l.reviews.map(r => `<div class="review"><b>${esc(r.profiles?.name)}</b> <span class="stars">${'★'.repeat(r.rating)}</span><div>${esc(r.comment)}</div></div>`).join('') || '<p class="meta">No reviews yet. Be the first to rate this place.</p>'}
-  ${user ? `<label>Your rating</label><select id="rStars"><option value="5">5 – Excellent</option><option value="4">4 – Good</option><option value="3">3 – Okay</option><option value="2">2 – Poor</option><option value="1">1 – Bad</option></select>
+  ${user && user.id === l.user_id ? '<p class="meta">You cannot review your own listing.</p>' : user ? `<label>Your rating</label><select id="rStars"><option value="5">5 – Excellent</option><option value="4">4 – Good</option><option value="3">3 – Okay</option><option value="2">2 – Poor</option><option value="1">1 – Bad</option></select>
   <label>Comment</label><textarea id="rText" rows="2" placeholder="Water, noise, safety, landlord..."></textarea>
   <p class="err" id="rErr"></p><button onclick="rate(${l.id})">Submit review</button>`
   : '<p><button onclick="authForm(\'login\')">Log in to leave a review</button></p>'}`);
