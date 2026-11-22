@@ -79,7 +79,7 @@ footer{text-align:center;color:#5a6f75;font-size:.8rem;padding:10px 0 24px}
 <main><div class="bar"><button id="vBtn" onclick="toggleMap()">Show map</button></div>
 <p class="meta" id="mapNote"></p><div id="map" hidden></div><div class="grid" id="grid"></div></main>
 
-<footer><a href="#" onclick="showLegal('terms');return false">Terms of Use</a> · <a href="#" onclick="showLegal('privacy');return false">Privacy Policy</a><br>Build 7</footer>
+<footer><a href="#" onclick="showLegal('terms');return false">Terms of Use</a> · <a href="#" onclick="showLegal('privacy');return false">Privacy Policy</a><br>Build 8</footer>
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -97,6 +97,8 @@ const SUPABASE_KEY = 'sb_publishable_bLWxCVG_ssY2zlpHHy06hQ_iFAyEDi6';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const $ = id => document.getElementById(id);
+const COLS = 'id,user_id,title,town,suburb,type,price,deposit,includes,description,photos,available,created_at,lat,lng,rooms';
+let returnTo = null;
 let user = null, mineMode = false, mapMode = false, lastList = [];
 const unit = l => l.type === 'Guest house' ? 'per night' : 'per month';
 const money = n => 'N$ ' + Number(n).toLocaleString();
@@ -143,6 +145,7 @@ async function submitAuth(mode) {
     await loadUser();
     if (!user) { aErr.textContent = 'Check your email to confirm your account, then log in.'; return; }
     dlg.close();
+    if (returnTo) { const r = returnTo; returnTo = null; show(r); }
   } catch (e) { aErr.textContent = e.message; }
 }
 
@@ -324,7 +327,7 @@ async function setAvail(id, v) {
   dlg.close(); load();
 }
 async function load() {
-  let qy = sb.from('listings').select('*,reviews(rating),profiles(verified)').order('created_at', { ascending: false }).limit(100);
+  let qy = sb.from('listings').select(COLS + ',reviews(rating),profiles(verified)').order('created_at', { ascending: false }).limit(100);
   qy = (mineMode && user) ? qy.eq('user_id', user.id) : qy.eq('available', true);
   if (town.value) qy = qy.ilike('town', '%' + town.value + '%');
   if (type.value) qy = qy.eq('type', type.value);
@@ -339,7 +342,7 @@ async function load() {
 }
 
 async function show(id) {
-  const { data, error } = await sb.from('listings').select('*,profiles(name,verified,role),reviews(rating,comment,created_at,profiles(name))').eq('id', id).single();
+  const { data, error } = await sb.from('listings').select(COLS + (user ? ',whatsapp' : '') + ',profiles(name,verified,role),reviews(rating,comment,created_at,profiles(name))').eq('id', id).single();
   if (error) return;
   const l = withRating(data);
   let contacted = false;
@@ -358,7 +361,7 @@ async function show(id) {
   <p>${esc(l.description)}</p>
   ${(l.rooms || []).length ? '<h3>Rooms</h3>' + l.rooms.map(r => `<div class="review"><b>${esc(r.name)}</b> · ${money(r.price)} per night${r.sleeps ? ' · sleeps ' + r.sleeps : ''}</div>`).join('') : ''}
   <div class="warn">⚠ ${warn}</div>
-  <p>${wa ? `<a class="wa" href="${wa}" onclick="logContact(${l.id})" target="_blank" rel="noopener">Chat on WhatsApp</a> ` : ''}<a class="wa" style="background:var(--mist);color:var(--ink)" href="${share}" target="_blank" rel="noopener">Share</a></p>
+  <p>${!user ? `<button onclick="returnTo=${l.id};authForm('register')">Sign up free to contact the landlord</button> <button class="ghost" style="color:var(--sea)" onclick="returnTo=${l.id};authForm('login')">Log in</button> ` : wa ? `<a class="wa" href="${wa}" onclick="logContact(${l.id})" target="_blank" rel="noopener">Chat on WhatsApp</a> ` : ''}<a class="wa" style="background:var(--mist);color:var(--ink)" href="${share}" target="_blank" rel="noopener">Share</a></p>
   ${user && user.id === l.user_id ? '' : `<p><button class="ghost" onclick="report(${l.id})">Report this listing</button></p>`}
   ${user && user.id === l.user_id ? `<p><button onclick="setAvail(${l.id},${!l.available})">${l.available ? 'Mark as taken' : 'Mark as available again'}</button> <button class="ghost" style="color:#b3261e" onclick="del(${l.id})">Delete this listing</button></p>` : ''}
   <h3>Reviews ${l.rating ? '· ★ ' + l.rating : ''}</h3>
