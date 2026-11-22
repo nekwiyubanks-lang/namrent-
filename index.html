@@ -53,6 +53,9 @@ label{display:block;font-size:.85rem;font-weight:600;margin:10px 0 4px}
 #map{height:460px;border-radius:12px;border:1px solid var(--line)}
 .bar{display:flex;justify-content:flex-end;margin-bottom:12px}
 .bar button{background:#fff;border:1px solid var(--line);color:var(--ink)}
+.pitch{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;max-width:900px;margin:0 0 18px;font-size:.9rem;color:#d5e6e8}
+.pitch div{border-left:3px solid var(--dune);padding-left:10px}.pitch b{display:block;color:#fff}
+footer{text-align:center;color:#5a6f75;font-size:.8rem;padding:10px 0 24px}
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 </head>
@@ -63,18 +66,19 @@ label{display:block;font-size:.85rem;font-weight:600;margin:10px 0 4px}
 </header>
 <section class="hero">
   <h1>Find a place to stay, anywhere in Namibia.</h1>
-  <p>Real listings with prices, photos and honest reviews from people who lived there.</p>
+  <p>Real listings with prices, photos and honest reviews. Browsing is free and needs no account.</p>
+  <div class="pitch"><div><b>Renters and guests</b>See real prices and photos in one place, with no digging through group chats.</div><div><b>Landlords, agents and guest houses</b>List your place free and reach people who are looking right now.</div></div>
   <div class="filters">
     <input id="q" placeholder="Search area or keyword" aria-label="Search">
     <input id="town" placeholder="Town (e.g. Windhoek)" aria-label="Town">
-    <select id="type" aria-label="Type"><option value="">Any type</option><option>Single room</option><option>Bachelor flat</option><option>Shared room</option><option>1 bedroom</option><option>2 bedroom</option><option>House</option></select>
+    <select id="type" aria-label="Type"><option value="">Any type</option><option>Single room</option><option>Bachelor flat</option><option>Shared room</option><option>1 bedroom</option><option>2 bedroom</option><option>Guest house</option><option>House</option></select>
     <input id="max" type="number" min="0" placeholder="Max rent (N$)" aria-label="Max rent">
   </div>
 </section>
 <main><div class="bar"><button id="vBtn" onclick="toggleMap()">Show map</button></div>
 <p class="meta" id="mapNote"></p><div id="map" hidden></div><div class="grid" id="grid"></div></main>
 
-<p style="text-align:center;color:#5a6f75;font-size:.75rem">Build 5</p>
+<footer><a href="#" onclick="showLegal('terms');return false">Terms of Use</a> · <a href="#" onclick="showLegal('privacy');return false">Privacy Policy</a><br>Build 6</footer>
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -93,6 +97,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const $ = id => document.getElementById(id);
 let user = null, mineMode = false, mapMode = false, lastList = [];
+const unit = l => l.type === 'Guest house' ? 'per night' : 'per month';
 const money = n => 'N$ ' + Number(n).toLocaleString();
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const withRating = l => { const rs = l.reviews || []; l.review_count = rs.length; l.rating = rs.length ? (rs.reduce((a, r) => a + r.rating, 0) / rs.length).toFixed(1) : null; return l; };
@@ -110,7 +115,7 @@ function openDlg(html) { $('dlgBody').innerHTML = '<button class="close" onclick
 function renderNav() {
   $('nav').innerHTML = user
     ? `<span>Hi, ${esc(user.name.split(' ')[0])}</span>` +
-      (user.role === 'landlord' ? '<button onclick="postForm()">Post a listing</button><button class="ghost" onclick="toggleMine()">' + (mineMode ? 'All listings' : 'My listings') + '</button>' : '') +
+      (['landlord', 'agent'].includes(user.role) ? '<button onclick="postForm()">Post a listing</button><button class="ghost" onclick="toggleMine()">' + (mineMode ? 'All listings' : 'My listings') + '</button>' : '') +
       '<button class="ghost" onclick="logout()">Log out</button>'
     : '<button class="ghost" onclick="authForm(\'login\')">Log in</button><button onclick="authForm(\'register\')">Sign up</button>';
 }
@@ -118,9 +123,10 @@ function renderNav() {
 function authForm(mode) {
   const reg = mode === 'register';
   openDlg(`<div><h2>${reg ? 'Create your account' : 'Log in'}</h2>
-  ${reg ? '<label>Full name</label><input id="aName"><label>I am a</label><select id="aRole"><option value="renter">Renter</option><option value="landlord">Landlord</option></select>' : ''}
+  ${reg ? '<label>Full name</label><input id="aName"><label>I am a</label><select id="aRole"><option value="renter">Renter</option><option value="landlord">Landlord</option><option value="agent">Agent</option></select>' : ''}
   <label>Email</label><input id="aEmail" type="email">
   <label>Password</label><input id="aPass" type="password" placeholder="At least 6 characters">
+  ${reg ? '<p class="meta">By signing up you agree to the Terms of Use and Privacy Policy (links at the bottom of the page).</p>' : ''}
   <p class="err" id="aErr"></p><button onclick="submitAuth('${mode}')">${reg ? 'Sign up' : 'Log in'}</button></div>`);
 }
 async function submitAuth(mode) {
@@ -143,10 +149,11 @@ function postForm() {
   openDlg(`<h2>Post a listing</h2>
   <label>Title</label><input id="pTitle" placeholder="Sunny bachelor flat near UNAM">
   <div class="row"><div><label>Town</label><input id="pTown"></div><div><label>Suburb</label><input id="pSub"></div></div>
-  <div class="row"><div><label>Type</label><select id="pType"><option>Single room</option><option>Bachelor flat</option><option>Shared room</option><option>1 bedroom</option><option>2 bedroom</option><option>House</option></select></div>
-  <div><label>Rent per month (N$)</label><input id="pPrice" type="number"></div></div>
+  <div class="row"><div><label>Type</label><select id="pType" onchange="typeChanged()"><option>Single room</option><option>Bachelor flat</option><option>Shared room</option><option>1 bedroom</option><option>2 bedroom</option><option>Guest house</option><option>House</option></select></div>
+  <div><label id="pPriceLbl">Rent per month (N$)</label><input id="pPrice" type="number"></div></div>
   <div class="row"><div><label>Deposit (N$)</label><input id="pDep" type="number"></div><div><label>WhatsApp number</label><input id="pWa" placeholder="264811234567"></div></div>
   <label>What is included? (comma separated)</label><input id="pInc" placeholder="Water, Electricity, WiFi">
+  <div id="roomsBox" hidden><label>Rooms (one per line: name, price per night, sleeps)</label><textarea id="pRooms" rows="3" placeholder="Double room, 650, 2&#10;Family room, 950, 4"></textarea></div>
   <label>Description</label><textarea id="pDesc" rows="3"></textarea>
   <label>Photos (up to 8)</label><input id="pPhotos" type="file" accept="image/*" multiple>
   <label>Location (tap the map to drop a pin)</label><div id="pickMap" style="height:200px;border-radius:8px;border:1px solid var(--line)"></div><p class="meta" id="pickNote">No pin set yet. You can skip this.</p>
@@ -168,7 +175,10 @@ async function submitPost() {
   if (posting) return;
   const btn = $('pBtn');
   try {
-    if (!pTitle.value || !pTown.value || !pPrice.value) throw new Error('Title, town and rent are required.');
+    const rooms = pType.value === 'Guest house'
+      ? pRooms.value.split('\n').map(x => x.split(',').map(t => t.trim())).filter(r => r[0] && r[1]).map(r => ({ name: r[0], price: +r[1] || 0, sleeps: +r[2] || null })) : [];
+    const price = +pPrice.value || (rooms.length ? Math.min(...rooms.map(r => r.price)) : 0);
+    if (!pTitle.value || !pTown.value || !price) throw new Error('Title, town and a price are required.');
     posting = true; btn.disabled = true; btn.textContent = 'Publishing... please wait';
     const urls = [];
     for (const [i, f] of [...pPhotos.files].slice(0, 8).entries()) {
@@ -179,7 +189,7 @@ async function submitPost() {
     }
     const { error } = await sb.from('listings').insert({
       user_id: user.id, title: pTitle.value, town: pTown.value, suburb: pSub.value, type: pType.value,
-      price: +pPrice.value, deposit: +pDep.value || 0, whatsapp: pWa.value, includes: pInc.value,
+      price, rooms, deposit: +pDep.value || 0, whatsapp: pWa.value, includes: pInc.value,
       description: pDesc.value, photos: urls, lat: pickLL ? pickLL.lat : null, lng: pickLL ? pickLL.lng : null });
     if (error) throw error;
     dlg.close(); load();
@@ -197,10 +207,40 @@ function card(l) {
   const img = l.photos?.[0] ? `style="background-image:url('${l.photos[0]}')"` : '';
   return `<article class="card" tabindex="0" onclick="show(${l.id})" onkeydown="if(event.key==='Enter')show(${l.id})">
     <div class="thumb" ${img}>${l.photos?.[0] ? '' : 'No photo yet'}</div>
-    <div class="body"><div class="price">${money(l.price)} <small>per month</small></div>
+    <div class="body"><div class="price">${money(l.price)} <small>${unit(l)}</small></div>
     <h3>${esc(l.title)}</h3>${l.profiles?.verified ? '<span class="badge">✓ Verified landlord</span>' : ''}${l.available ? '' : ' <span class="tag">Taken</span>'}<div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)}</div>
     <div class="stars">${l.rating ? '★ ' + l.rating + ' (' + l.review_count + ')' : 'No reviews yet'}</div></div></article>`;
 }
+function typeChanged() {
+  const g = pType.value === 'Guest house';
+  roomsBox.hidden = !g; pPriceLbl.textContent = g ? 'Price per night, from (N$)' : 'Rent per month (N$)';
+}
+async function report(id) {
+  if (!user) { authForm('login'); return; }
+  const reason = prompt('What is wrong with this listing? (fake, already taken, wrong price, scam...)');
+  if (!reason) return;
+  const { error } = await sb.from('reports').insert({ listing_id: id, user_id: user.id, reason: reason.slice(0, 300) });
+  alert(error ? (error.code === '23505' ? 'You have already reported this listing.' : error.message) : 'Thank you. We will review this listing.');
+}
+const LEGAL = {
+  terms: `<h2>Terms of Use</h2>
+  <p><b>Draft for review before launch.</b></p>
+  <p><b>1. What we are.</b> NamRent is an online listing platform. We are not a landlord, estate agent, guest house operator or party to any lease or booking. Any agreement is between the people involved.</p>
+  <p><b>2. Listings.</b> The person who posts a listing is responsible for it being accurate, lawful and theirs (or that they are authorised) to advertise. Fake, misleading or unlawful listings are not allowed. We may remove listings and suspend accounts at any time.</p>
+  <p><b>3. Payments.</b> We do not handle payments. Never pay a deposit or rent before viewing the place and confirming who you are dealing with.</p>
+  <p><b>4. Reviews.</b> Reviews must be honest and based on your own experience. No abuse, threats or false statements.</p>
+  <p><b>5. Verified badge.</b> A verified badge means we checked certain information at a point in time. It is not a guarantee about a person or a property.</p>
+  <p><b>6. Liability.</b> The platform is provided as is. To the extent allowed by Namibian law, we are not liable for losses arising from dealings between users.</p>
+  <p><b>7. Contact.</b> To report a problem, contact us at [add your email here].</p>`,
+  privacy: `<h2>Privacy Policy</h2>
+  <p><b>Draft for review before launch.</b></p>
+  <p><b>What we collect.</b> Your name, email address and password (stored securely), the listings, photos and WhatsApp numbers you post, and reviews and reports you submit.</p>
+  <p><b>What is public.</b> Listing details, photos, WhatsApp number on a listing, your name next to listings and reviews. Your email is not shown publicly.</p>
+  <p><b>Why.</b> To run the platform, show listings, keep users safe and prevent scams.</p>
+  <p><b>Where it is stored.</b> With our service provider, Supabase, whose servers may be outside Namibia. We do not sell your personal information.</p>
+  <p><b>Your choices.</b> You can ask us to correct or delete your account and listings by contacting us at [add your email here].</p>`
+};
+function showLegal(k) { openDlg(LEGAL[k]); }
 function toggleMine() { mineMode = !mineMode; renderNav(); load(); }
 let map, layer;
 const dot = { radius: 9, color: '#0b3c49', fillColor: '#e8a33d', fillOpacity: .95, weight: 2 };
@@ -217,7 +257,7 @@ function drawMap() {
   if (!map || !mapMode) return;
   layer.clearLayers(); const pts = [];
   lastList.filter(l => l.lat != null && l.lng != null).forEach(l => {
-    L.circleMarker([l.lat, l.lng], dot).addTo(layer).bindPopup(`<b>${esc(l.title)}</b><br>${money(l.price)} per month<br><a href="#" onclick="show(${l.id});return false">View details</a>`);
+    L.circleMarker([l.lat, l.lng], dot).addTo(layer).bindPopup(`<b>${esc(l.title)}</b><br>${money(l.price)} ${unit(l)}<br><a href="#" onclick="show(${l.id});return false">View details</a>`);
     pts.push([l.lat, l.lng]);
   });
   $('mapNote').textContent = pts.length ? '' : 'No listings with a map pin match your search yet.';
@@ -255,19 +295,21 @@ async function load() {
 }
 
 async function show(id) {
-  const { data, error } = await sb.from('listings').select('*,profiles(name,verified),reviews(rating,comment,created_at,profiles(name))').eq('id', id).single();
+  const { data, error } = await sb.from('listings').select('*,profiles(name,verified,role),reviews(rating,comment,created_at,profiles(name))').eq('id', id).single();
   if (error) return;
   const l = withRating(data);
   const wa = l.whatsapp ? `https://wa.me/${l.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent('Hi, is "' + l.title + '" still available?')}` : '';
   const share = `https://wa.me/?text=${encodeURIComponent(l.title + ' – ' + money(l.price) + ' in ' + l.town + ' ' + location.href.split('#')[0])}`;
   openDlg(`<h2>${esc(l.title)}</h2>
-  <div class="price">${money(l.price)} <small>per month · deposit ${money(l.deposit)}</small></div>
-  <div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)} · listed by ${esc(l.profiles?.name)} ${l.profiles?.verified ? '<span class="badge">✓ Verified landlord</span>' : ''}</div>
+  <div class="price">${money(l.price)} <small>${unit(l)}${l.type === 'Guest house' ? '' : ' · deposit ' + money(l.deposit)}</small></div>
+  <div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)} · listed by ${esc(l.profiles?.name)}${l.profiles?.role === 'agent' ? ' (agent)' : ''} ${l.profiles?.verified ? '<span class="badge">✓ Verified landlord</span>' : ''}</div>
   <div class="gallery">${(l.photos || []).map(p => `<img src="${p}" alt="Photo of ${esc(l.title)}">`).join('') || '<p class="meta">No photos yet.</p>'}</div>
   ${(l.includes || '').split(',').filter(x => x.trim()).map(x => `<span class="tag">${esc(x.trim())}</span>`).join('')}
   <p>${esc(l.description)}</p>
+  ${(l.rooms || []).length ? '<h3>Rooms</h3>' + l.rooms.map(r => `<div class="review"><b>${esc(r.name)}</b> · ${money(r.price)} per night${r.sleeps ? ' · sleeps ' + r.sleeps : ''}</div>`).join('') : ''}
   <p>${wa ? `<a class="wa" href="${wa}" target="_blank" rel="noopener">Chat on WhatsApp</a> ` : ''}<a class="wa" style="background:var(--mist);color:var(--ink)" href="${share}" target="_blank" rel="noopener">Share</a></p>
   <p class="meta">Tip: never pay a deposit before you have viewed the place.</p>
+  ${user && user.id === l.user_id ? '' : `<p><button class="ghost" onclick="report(${l.id})">Report this listing</button></p>`}
   ${user && user.id === l.user_id ? `<p><button onclick="setAvail(${l.id},${!l.available})">${l.available ? 'Mark as taken' : 'Mark as available again'}</button> <button class="ghost" style="color:#b3261e" onclick="del(${l.id})">Delete this listing</button></p>` : ''}
   <h3>Reviews ${l.rating ? '· ★ ' + l.rating : ''}</h3>
   ${l.reviews.map(r => `<div class="review"><b>${esc(r.profiles?.name)}</b> <span class="stars">${'★'.repeat(r.rating)}</span><div>${esc(r.comment)}</div></div>`).join('') || '<p class="meta">No reviews yet. Be the first to rate this place.</p>'}
