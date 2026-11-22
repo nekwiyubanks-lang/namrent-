@@ -55,6 +55,7 @@ label{display:block;font-size:.85rem;font-weight:600;margin:10px 0 4px}
 .bar button{background:#fff;border:1px solid var(--line);color:var(--ink)}
 .pitch{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;max-width:900px;margin:0 0 18px;font-size:.9rem;color:#d5e6e8}
 .pitch div{border-left:3px solid var(--dune);padding-left:10px}.pitch b{display:block;color:#fff}
+.warn{background:#fff6e0;border:1px solid #f0d48a;border-radius:8px;padding:8px 12px;font-size:.85rem;margin:10px 0}
 footer{text-align:center;color:#5a6f75;font-size:.8rem;padding:10px 0 24px}
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
@@ -78,7 +79,7 @@ footer{text-align:center;color:#5a6f75;font-size:.8rem;padding:10px 0 24px}
 <main><div class="bar"><button id="vBtn" onclick="toggleMap()">Show map</button></div>
 <p class="meta" id="mapNote"></p><div id="map" hidden></div><div class="grid" id="grid"></div></main>
 
-<footer><a href="#" onclick="showLegal('terms');return false">Terms of Use</a> · <a href="#" onclick="showLegal('privacy');return false">Privacy Policy</a><br>Build 6</footer>
+<footer><a href="#" onclick="showLegal('terms');return false">Terms of Use</a> · <a href="#" onclick="showLegal('privacy');return false">Privacy Policy</a><br>Build 7</footer>
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -105,8 +106,8 @@ const withRating = l => { const rs = l.reviews || []; l.review_count = rs.length
 async function loadUser() {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { user = null; return renderNav(); }
-  const { data } = await sb.from('profiles').select('name,role').eq('id', session.user.id).single();
-  user = { id: session.user.id, name: data?.name || 'there', role: data?.role || 'renter' };
+  const { data } = await sb.from('profiles').select('name,role,verified').eq('id', session.user.id).single();
+  user = { id: session.user.id, name: data?.name || 'there', role: data?.role || 'renter', verified: !!data?.verified };
   renderNav();
 }
 async function logout() { await sb.auth.signOut(); user = null; renderNav(); }
@@ -115,7 +116,7 @@ function openDlg(html) { $('dlgBody').innerHTML = '<button class="close" onclick
 function renderNav() {
   $('nav').innerHTML = user
     ? `<span>Hi, ${esc(user.name.split(' ')[0])}</span>` +
-      (['landlord', 'agent'].includes(user.role) ? '<button onclick="postForm()">Post a listing</button><button class="ghost" onclick="toggleMine()">' + (mineMode ? 'All listings' : 'My listings') + '</button>' : '') +
+      (['landlord', 'agent'].includes(user.role) ? '<button onclick="postForm()">Post a listing</button><button class="ghost" onclick="toggleMine()">' + (mineMode ? 'All listings' : 'My listings') + '</button>' + (user.verified ? '' : '<button class="ghost" onclick="kycForm()">Get verified</button>') : '') +
       '<button class="ghost" onclick="logout()">Log out</button>'
     : '<button class="ghost" onclick="authForm(\'login\')">Log in</button><button onclick="authForm(\'register\')">Sign up</button>';
 }
@@ -211,6 +212,48 @@ function card(l) {
     <h3>${esc(l.title)}</h3>${l.profiles?.verified ? '<span class="badge">✓ Verified landlord</span>' : ''}${l.available ? '' : ' <span class="tag">Taken</span>'}<div class="meta">${esc(l.suburb ? l.suburb + ', ' : '')}${esc(l.town)} · ${esc(l.type)}</div>
     <div class="stars">${l.rating ? '★ ' + l.rating + ' (' + l.review_count + ')' : 'No reviews yet'}</div></div></article>`;
 }
+async function logContact(id) {
+  if (!user) return;
+  await sb.from('contacts').upsert({ listing_id: id, user_id: user.id }, { onConflict: 'listing_id,user_id', ignoreDuplicates: true });
+  show(id);
+}
+async function kycForm() {
+  const { data } = await sb.from('kyc_submissions').select('status').eq('user_id', user.id).order('created_at', { ascending: false }).limit(1);
+  const st = data && data[0] ? data[0].status : null;
+  if (st === 'pending') { openDlg('<h2>Verification in review</h2><p>We received your documents and will review them soon. You will get your badge once approved.</p>'); return; }
+  const agent = user.role === 'agent';
+  openDlg(`<h2>Get verified</h2>
+  ${st === 'rejected' ? '<p class="err">Your last submission was not approved. Please check your documents and submit again.</p>' : ''}
+  <p class="meta">Verified landlords and agents get a badge, which builds trust and brings more enquiries. Documents are stored privately, used only for verification, and never shown to the public.</p>
+  <label>Photo of your ID (ID card, passport or driving licence)</label><input id="kId" type="file" accept="image/*,application/pdf">
+  <label>${agent ? 'Proof of authority to let (mandate letter or signed agreement)' : 'Proof you own or manage the property (title deed, lease or recent municipal bill)'}</label><input id="kProof" type="file" accept="image/*,application/pdf">
+  ${agent ? '<label>Estate agent licence</label><input id="kLic" type="file" accept="image/*,application/pdf">' : ''}
+  <label>Notes (optional)</label><input id="kNote" placeholder="Anything we should know">
+  <p class="err" id="kErr"></p><button id="kBtn" onclick="submitKyc()">Submit for review</button>`);
+}
+let kycBusy = false;
+async function upKyc(file, tag) {
+  const img = file.type.startsWith('image/');
+  const ext = img ? 'jpg' : ((file.name.split('.').pop() || 'pdf').toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const path = `${user.id}/${Date.now()}-${tag}.${ext}`;
+  const { error } = await sb.storage.from('kyc-docs').upload(path, img ? await shrink(file) : file, { contentType: img ? 'image/jpeg' : file.type });
+  if (error) throw error;
+  return path;
+}
+async function submitKyc() {
+  if (kycBusy) return;
+  const b = $('kBtn');
+  try {
+    if (!kId.files[0] || !kProof.files[0] || (user.role === 'agent' && !kLic.files[0])) throw new Error('Please attach all the required documents.');
+    kycBusy = true; b.disabled = true; b.textContent = 'Uploading... please wait';
+    const row = { user_id: user.id, id_path: await upKyc(kId.files[0], 'id'), proof_path: await upKyc(kProof.files[0], 'proof'), note: kNote.value.slice(0, 300) };
+    if (user.role === 'agent') row.licence_path = await upKyc(kLic.files[0], 'licence');
+    const { error } = await sb.from('kyc_submissions').insert(row);
+    if (error) throw error;
+    openDlg('<h2>Thank you</h2><p>Your documents were submitted. We will review them and add your verified badge once approved.</p>');
+  } catch (e) { kErr.textContent = e.message; b.disabled = false; b.textContent = 'Submit for review'; }
+  kycBusy = false;
+}
 function typeChanged() {
   const g = pType.value === 'Guest house';
   roomsBox.hidden = !g; pPriceLbl.textContent = g ? 'Price per night, from (N$)' : 'Rent per month (N$)';
@@ -231,14 +274,15 @@ const LEGAL = {
   <p><b>4. Reviews.</b> Reviews must be honest and based on your own experience. No abuse, threats or false statements.</p>
   <p><b>5. Verified badge.</b> A verified badge means we checked certain information at a point in time. It is not a guarantee about a person or a property.</p>
   <p><b>6. Liability.</b> The platform is provided as is. To the extent allowed by Namibian law, we are not liable for losses arising from dealings between users.</p>
-  <p><b>7. Contact.</b> To report a problem, contact us at nekwiyubanks@gmail.com.</p>`,
+  <p><b>7. Contact.</b> To report a problem, contact us at [add your email here].</p>`,
   privacy: `<h2>Privacy Policy</h2>
   <p><b>Draft for review before launch.</b></p>
   <p><b>What we collect.</b> Your name, email address and password (stored securely), the listings, photos and WhatsApp numbers you post, and reviews and reports you submit.</p>
   <p><b>What is public.</b> Listing details, photos, WhatsApp number on a listing, your name next to listings and reviews. Your email is not shown publicly.</p>
+  <p><b>Verification documents.</b> If you apply for the verified badge, we collect your ID and proof documents. They are stored privately, used only to verify you, and never shown publicly. You can ask us to delete them.</p>
   <p><b>Why.</b> To run the platform, show listings, keep users safe and prevent scams.</p>
   <p><b>Where it is stored.</b> With our service provider, Supabase, whose servers may be outside Namibia. We do not sell your personal information.</p>
-  <p><b>Your choices.</b> You can ask us to correct or delete your account and listings by contacting us at nekwiyubanks@gmail.com.</p>`
+  <p><b>Your choices.</b> You can ask us to correct or delete your account and listings by contacting us at [add your email here].</p>`
 };
 function showLegal(k) { openDlg(LEGAL[k]); }
 function toggleMine() { mineMode = !mineMode; renderNav(); load(); }
@@ -298,6 +342,12 @@ async function show(id) {
   const { data, error } = await sb.from('listings').select('*,profiles(name,verified,role),reviews(rating,comment,created_at,profiles(name))').eq('id', id).single();
   if (error) return;
   const l = withRating(data);
+  let contacted = false;
+  if (user && user.id !== l.user_id) {
+    const { data: c } = await sb.from('contacts').select('id').eq('listing_id', id).eq('user_id', user.id).limit(1);
+    contacted = !!(c && c.length);
+  }
+  const warn = l.profiles?.verified ? 'Verified landlord. Even so, never pay a deposit before you have viewed the place.' : 'This landlord is not verified yet. Take extra care: never pay a deposit before you have viewed the place and met the person.';
   const wa = l.whatsapp ? `https://wa.me/${l.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent('Hi, is "' + l.title + '" still available?')}` : '';
   const share = `https://wa.me/?text=${encodeURIComponent(l.title + ' – ' + money(l.price) + ' in ' + l.town + ' ' + location.href.split('#')[0])}`;
   openDlg(`<h2>${esc(l.title)}</h2>
@@ -307,13 +357,13 @@ async function show(id) {
   ${(l.includes || '').split(',').filter(x => x.trim()).map(x => `<span class="tag">${esc(x.trim())}</span>`).join('')}
   <p>${esc(l.description)}</p>
   ${(l.rooms || []).length ? '<h3>Rooms</h3>' + l.rooms.map(r => `<div class="review"><b>${esc(r.name)}</b> · ${money(r.price)} per night${r.sleeps ? ' · sleeps ' + r.sleeps : ''}</div>`).join('') : ''}
-  <p>${wa ? `<a class="wa" href="${wa}" target="_blank" rel="noopener">Chat on WhatsApp</a> ` : ''}<a class="wa" style="background:var(--mist);color:var(--ink)" href="${share}" target="_blank" rel="noopener">Share</a></p>
-  <p class="meta">Tip: never pay a deposit before you have viewed the place.</p>
+  <div class="warn">⚠ ${warn}</div>
+  <p>${wa ? `<a class="wa" href="${wa}" onclick="logContact(${l.id})" target="_blank" rel="noopener">Chat on WhatsApp</a> ` : ''}<a class="wa" style="background:var(--mist);color:var(--ink)" href="${share}" target="_blank" rel="noopener">Share</a></p>
   ${user && user.id === l.user_id ? '' : `<p><button class="ghost" onclick="report(${l.id})">Report this listing</button></p>`}
   ${user && user.id === l.user_id ? `<p><button onclick="setAvail(${l.id},${!l.available})">${l.available ? 'Mark as taken' : 'Mark as available again'}</button> <button class="ghost" style="color:#b3261e" onclick="del(${l.id})">Delete this listing</button></p>` : ''}
   <h3>Reviews ${l.rating ? '· ★ ' + l.rating : ''}</h3>
   ${l.reviews.map(r => `<div class="review"><b>${esc(r.profiles?.name)}</b> <span class="stars">${'★'.repeat(r.rating)}</span><div>${esc(r.comment)}</div></div>`).join('') || '<p class="meta">No reviews yet. Be the first to rate this place.</p>'}
-  ${user && user.id === l.user_id ? '<p class="meta">You cannot review your own listing.</p>' : user ? `<label>Your rating</label><select id="rStars"><option value="5">5 – Excellent</option><option value="4">4 – Good</option><option value="3">3 – Okay</option><option value="2">2 – Poor</option><option value="1">1 – Bad</option></select>
+  ${user && user.id === l.user_id ? '<p class="meta">You cannot review your own listing.</p>' : user && !contacted ? '<p class="meta">You can review this place after you contact the landlord on WhatsApp. This keeps reviews honest.</p>' : user ? `<label>Your rating</label><select id="rStars"><option value="5">5 – Excellent</option><option value="4">4 – Good</option><option value="3">3 – Okay</option><option value="2">2 – Poor</option><option value="1">1 – Bad</option></select>
   <label>Comment</label><textarea id="rText" rows="2" placeholder="Water, noise, safety, landlord..."></textarea>
   <p class="err" id="rErr"></p><button onclick="rate(${l.id})">Submit review</button>`
   : '<p><button onclick="authForm(\'login\')">Log in to leave a review</button></p>'}`);
